@@ -1,0 +1,787 @@
+<!DOCTYPE html>
+<html lang="en">
+    <head>
+        <meta charset="utf-8">
+        <title>Inverted pendulum</title>
+        <style>
+            body { margin: 0; }
+        </style>
+    </head>
+	<body>
+        <script src="../js/three.js"></script>
+        <script src="../js/OrbitControls.js"></script>
+        <script src="../js/ammo.js"></script>
+        <script src="../js/GLTFLoader.js"></script>
+        <script src="../js/WebGL.js"></script>
+        <script>
+
+        Ammo().then(function(Ammo) { 
+
+        // variable declaration
+            // - global
+            var rod, cart, track, tracksup1, tracksup2;
+            var Force = 100;
+            var blockGroup = new THREE.Group();
+            blockGroup.name = 'blockGroup';
+            var compoundShape_cart = new Ammo.btCompoundShape();
+            var compoundShape_rod = new Ammo.btCompoundShape();
+            const STATE = { DISABLE_DEACTIVATION : 4 };
+            // - graphics
+            var camera, controls, scene, renderer;
+            var clock = new THREE.Clock();
+            // - physics
+            var physicsWorld;
+            var collisionConfiguration;
+            var dispatcher;
+            var overlappingPairCache;
+            var solver;
+            var gravityConstant = -9.82;
+            var rigidBodies = [];
+            var tmpTransform = new Ammo.btTransform();
+            // - key
+            var moveDirection = { left: 0, right: 0, forward: 0, back: 0 };
+
+        // main program
+            setupPhysicsWorld();
+            setupGraphics();
+            // createPlatform();
+            createcolShape_cart();
+            createcolShape_rod();
+            LoadParts();
+            keyboardInput();
+            renderFrame();
+        // functions
+
+            function setupPhysicsWorld(){
+
+                collisionConfiguration  = new Ammo.btDefaultCollisionConfiguration();
+                dispatcher              = new Ammo.btCollisionDispatcher(collisionConfiguration);
+                overlappingPairCache    = new Ammo.btDbvtBroadphase();
+                solver                  = new Ammo.btSequentialImpulseConstraintSolver();
+
+                physicsWorld           = new Ammo.btDiscreteDynamicsWorld(dispatcher, overlappingPairCache, solver, collisionConfiguration);
+                physicsWorld.setGravity(new Ammo.btVector3(0, gravityConstant, 0));
+
+                } 
+
+            function setupGraphics(){
+                
+                // create scene
+                scene = new THREE.Scene();
+                scene.background = new THREE.Color( 0xbfd1e5 );
+
+                // create camera
+                camera = new THREE.PerspectiveCamera( 60, window.innerWidth / window.innerHeight, 0.2, 5000 );
+                
+                camera.position.set( 0, 30, 70 );
+                camera.lookAt(new THREE.Vector3(0, 0, 0));
+
+                // light
+                var ambientLight = new THREE.AmbientLight( 0xffffff );
+                scene.add( ambientLight );
+
+                var light = new THREE.DirectionalLight( 0xffffff, 1 );
+                light.position.set( 100, 200, 100 );
+                light.castShadow = true;
+                var d = 50;
+                light.shadow.camera.left = -d;
+                light.shadow.camera.right = d;
+                light.shadow.camera.top = d;
+                light.shadow.camera.bottom = -d;
+
+                light.shadow.camera.near = 2;
+                light.shadow.camera.far = 500;
+
+                light.shadow.mapSize.x = 1024;
+                light.shadow.mapSize.y = 1024;
+
+                scene.add( light );
+
+                // setup renderer
+                renderer = new THREE.WebGLRenderer( { antialias: true } );
+                renderer.setClearColor( 0xbfd1e5 );
+                renderer.setPixelRatio( window.devicePixelRatio );
+                renderer.setSize( window.innerWidth, window.innerHeight );
+                document.body.appendChild( renderer.domElement );
+                renderer.shadowMap.enabled = true;
+
+                // orbit control
+                controls = new THREE.OrbitControls( camera, renderer.domElement );
+
+                controls.enableDamping = true; 
+                controls.dampingFactor = 0.05;
+                controls.screenSpacePanning = false;
+                controls.minDistance = 10;
+                controls.maxDistance = 500;
+                controls.maxPolarAngle = Math.PI / 2; 
+
+                }
+            
+            function createRigidObjects(object, colShape, mass, position, quaternion, colGroup, colMask){
+                
+                var transform = new Ammo.btTransform();
+                transform.setIdentity();
+                transform.setOrigin(new Ammo.btVector3(position.x, position.y, position.z));
+                transform.setRotation(new Ammo.btQuaternion(quaternion.x, quaternion.y, quaternion.z, quaternion.w));
+                var motionState = new Ammo.btDefaultMotionState(transform);
+                var localInertia = new Ammo.btVector3(0, 0, 0);
+                colShape.calculateLocalInertia(mass, localInertia);
+                var rigidBodyInfo = new Ammo.btRigidBodyConstructionInfo(mass, motionState, colShape, localInertia);
+                var rigidBody = new Ammo.btRigidBody(rigidBodyInfo);
+                object.userData.physicsBody = rigidBody;
+                
+                scene.add(object);
+
+                if ( mass > 0 ){
+                    rigidBody.setActivationState( STATE.DISABLE_DEACTIVATION );
+                    rigidBodies.push(object);
+                }
+
+                physicsWorld.addRigidBody(rigidBody, colGroup, colMask);
+
+                }
+
+            function createPlatform(){
+                
+                var pos = {x: 0, y: 0, z: 0};
+                var scale = {x: 80, y: 1, z: 50};
+                var quat = {x: 0, y: 0, z: 0, w: 1};
+                var mass = 0;
+
+                var blockPlane = new THREE.Mesh(new THREE.BoxBufferGeometry(), new THREE.MeshPhongMaterial({color: 0xa0afa4}));
+                blockPlane.position.set(pos.x, pos.y, pos.z);
+                blockPlane.scale.set(scale.x, scale.y, scale.z);
+                blockPlane.castShadow = true;
+                blockPlane.receiveShadow = true;
+
+                var colShape = new Ammo.btBoxShape( new Ammo.btVector3( scale.x * 0.5, scale.y * 0.5, scale.z * 0.5 ) );
+                colShape.setMargin( 0.01 );
+
+                createRigidObjects(blockPlane, colShape, mass, pos, quat, 2, 5);
+
+                }
+            
+            function createcolShape_cart(){
+                var quat = {x: 0, y: 0, z: 0, w: 1};
+
+                var quat_c = {x: Math.sqrt(2)/2, y: 0, z: 0, w: Math.sqrt(2)/2};
+                //compoundshape
+                var pos1_1 = {x: 0, y: 80 * (0.005 + 0.00125), z: 80 * 0.015};
+                var pos1_2 = {x: 0, y: 80 * (0.005 + 0.00125), z: - 80 * 0.015};
+                var pos2_1 = {x: 0, y: - 80 * (0.005 + 0.00125), z: 80 * 0.015};
+                var pos2_2 = {x: 0, y: - 80 * (0.005 + 0.00125), z: - 80 * 0.015};
+                var pos_c = {x: 0, y: 80 * 0.0175, z: 0};
+                var pos3 = {x: 10, y: 10, z: 0}; //5 + 80 * 0.0025
+
+
+                var scale1_1 = {x: 80 * 0.04, y: 80 * 0.0025, z: 80 * 0.015};
+                var scale1_2 = {x: 80 * 0.04, y: 80 * 0.0025, z: 80 * 0.015};
+                var scale2_1 = {x: 80 * 0.04, y: 80 * 0.0025, z: 80 * 0.015};
+                var scale2_2 = {x: 80 * 0.04, y: 80 * 0.0025, z: 80 * 0.015};
+                var radius = 80 * 0.004;
+                var width = 80 * 0.02;
+
+                var mass1_1 = 1;
+                var mass1_2 = 1;
+                var mass2_1 = 1;
+                var mass2_2 = 1;
+                var mass_c = 1;
+
+                // var blockGroup = new THREE.Group();
+
+                var transform1_1 = new Ammo.btTransform();
+                var transform1_2 = new Ammo.btTransform();
+                var transform2_1 = new Ammo.btTransform();
+                var transform2_2 = new Ammo.btTransform();
+                var transform_c = new Ammo.btTransform();
+                var transform3 = new Ammo.btTransform();               
+
+                // //Block1_1 Graphics
+                // var block1_1 = new THREE.Mesh(new THREE.BoxBufferGeometry(), new THREE.MeshPhongMaterial({color: 0x78d663}));
+
+                // block1_1.position.set(pos1_1.x, pos1_1.y, pos1_1.z);
+                // block1_1.scale.set(scale1_1.x, scale1_1.y, scale1_1.z);             
+                // block1_1.castShadow = true;
+                // block1_1.receiveShadow = true;
+
+                // blockGroup.add(block1_1);
+
+                //Block1_1 Physics
+                transform1_1.setIdentity();
+                transform1_1.setOrigin( new Ammo.btVector3( pos1_1.x, pos1_1.y, pos1_1.z ) );
+                transform1_1.setRotation( new Ammo.btQuaternion( quat.x, quat.y, quat.z, quat.w ) );
+
+
+                var blockColShape1_1 = new Ammo.btBoxShape( new Ammo.btVector3( scale1_1.x * 0.5, scale1_1.y * 0.5, scale1_1.z * 0.5 ) );
+                blockColShape1_1.setMargin( 0.01 );    
+
+                // //Block1_2 Graphics
+                // var block1_2 = new THREE.Mesh(new THREE.BoxBufferGeometry(), new THREE.MeshPhongMaterial({color: 0x78d663}));
+
+                // block1_2.position.set(pos1_2.x, pos1_2.y, pos1_2.z);
+                // block1_2.scale.set(scale1_2.x, scale1_2.y, scale1_2.z);             
+                // block1_2.castShadow = true;
+                // block1_2.receiveShadow = true;
+
+                // blockGroup.add(block1_2);
+
+                //Block1_2 Physics
+                transform1_2.setIdentity();
+                transform1_2.setOrigin( new Ammo.btVector3( pos1_2.x, pos1_2.y, pos1_2.z ) );
+                transform1_2.setRotation( new Ammo.btQuaternion( quat.x, quat.y, quat.z, quat.w ) );
+
+
+                var blockColShape1_2 = new Ammo.btBoxShape( new Ammo.btVector3( scale1_2.x * 0.5, scale1_2.y * 0.5, scale1_2.z * 0.5 ) );
+                blockColShape1_2.setMargin( 0.01 );   
+
+                // //Block2_1 Graphics
+                // var block2_1 = new THREE.Mesh(new THREE.BoxBufferGeometry(), new THREE.MeshPhongMaterial({color: 0xf78a1d}));
+
+                // block2_1.position.set(pos2_1.x, pos2_1.y, pos2_1.z);
+                // block2_1.scale.set(scale2_1.x, scale2_1.y, scale2_1.z);
+                // block2_1.castShadow = true;
+                // block2_1.receiveShadow = true;            
+
+                // blockGroup.add(block2_1);
+
+
+                //Block2_1 Physics
+                transform2_1.setIdentity();
+                transform2_1.setOrigin( new Ammo.btVector3( pos2_1.x, pos2_1.y, pos2_1.z ) );
+                transform2_1.setRotation( new Ammo.btQuaternion( quat.x, quat.y, quat.z, quat.w ) );
+
+
+                var blockColShape2_1 = new Ammo.btBoxShape( new Ammo.btVector3( scale2_1.x * 0.5, scale2_1.y * 0.5, scale2_1.z * 0.5 ) );
+                blockColShape2_1.setMargin( 0.01 );
+
+                // //Block2_2 Graphics
+                // var block2_2 = new THREE.Mesh(new THREE.BoxBufferGeometry(), new THREE.MeshPhongMaterial({color: 0xf78a1d}));
+
+                // block2_2.position.set(pos2_2.x, pos2_2.y, pos2_2.z);
+                // block2_2.scale.set(scale2_2.x, scale2_2.y, scale2_2.z);
+                // block2_2.castShadow = true;
+                // block2_2.receiveShadow = true;            
+
+                // blockGroup.add(block2_2);
+
+
+                //Block2_2 Physics
+                transform2_2.setIdentity();
+                transform2_2.setOrigin( new Ammo.btVector3( pos2_2.x, pos2_2.y, pos2_2.z ) );
+                transform2_2.setRotation( new Ammo.btQuaternion( quat.x, quat.y, quat.z, quat.w ) );
+
+
+                var blockColShape2_2 = new Ammo.btBoxShape( new Ammo.btVector3( scale2_2.x * 0.5, scale2_2.y * 0.5, scale2_2.z * 0.5 ) );
+                blockColShape2_2.setMargin( 0.01 );
+
+                // //Cylinder Graphic
+                // var cylinder = new THREE.Mesh(new THREE.CylinderGeometry(radius, radius, width, 24, 1), new THREE.MeshPhongMaterial({color: 0xff0036}));
+
+                // cylinder.position.set(pos_c.x, pos_c.y, pos_c.z);
+                // cylinder.quaternion.set(quat_c.x, quat_c.y, quat_c.z, quat_c.w);
+                // cylinder.castShadow = true;
+                // cylinder.receiveShadow = true;
+                // blockGroup.add(cylinder);
+                // scene.add(blockGroup);
+
+                //Cylinder Physics
+                transform_c.setIdentity();
+                transform_c.setOrigin( new Ammo.btVector3( pos_c.x, pos_c.y, pos_c.z ) );
+                transform_c.setRotation( new Ammo.btQuaternion( quat_c.x, quat_c.y, quat_c.z, quat_c.w ) );
+
+                var colShape_c = new Ammo.btCylinderShape( new Ammo.btVector3(radius, width * 0.5, radius));
+                colShape_c.setMargin( 0.01 );
+
+                //
+                
+                compoundShape_cart.addChildShape(transform1_1, blockColShape1_1);
+                compoundShape_cart.addChildShape(transform1_2, blockColShape1_2);
+                compoundShape_cart.addChildShape(transform2_1, blockColShape2_1);
+                compoundShape_cart.addChildShape(transform2_2, blockColShape2_2);
+                compoundShape_cart.addChildShape(transform_c, colShape_c);
+
+                // transform3.setIdentity();
+                // transform3.setOrigin( new Ammo.btVector3( pos3.x, pos3.y, pos3.z ) );
+                // transform3.setRotation( new Ammo.btQuaternion( quat.x, quat.y, quat.z, quat.w ) );
+                // var motionState = new Ammo.btDefaultMotionState( transform3 );                      
+
+                // var totalMass = mass1_1 + mass2_1 + mass_c;
+
+                // localInertia = new Ammo.btVector3( 0, 0, 0 );
+                // compoundShape_cart.calculateLocalInertia( totalMass, localInertia );
+
+                // rbInfo = new Ammo.btRigidBodyConstructionInfo( totalMass, motionState, compoundShape_cart, localInertia );
+                // var compoundBody = new Ammo.btRigidBody( rbInfo );
+                // compoundBody.setActivationState( STATE.DISABLE_DEACTIVATION );
+                // physicsWorld.addRigidBody( compoundBody, 15, 15 );//, colGroupGreenBall, colGroupPlane | colGroupRedBall | colGroupGreenBall  );
+
+                // blockGroup.userData.physicsBody = compoundBody;
+                // rigidBodies.push(blockGroup);     
+
+
+                /* Shape Template
+
+                // //red box
+                // var pos = {x: 10, y: 5, z: 0};
+                // var scale = {x: 4.9, y: 4.9, z: 4.9};
+                // var mass = 1;
+
+                // var box = new THREE.Mesh(new THREE.BoxBufferGeometry(), new THREE.MeshPhongMaterial({color: 0xff0036}));
+                // box.name = 'box';
+                // box.position.set(pos.x, pos.y, pos.z);
+                // box.scale.set(scale.x, scale.y, scale.z);
+                // box.castShadow = true;
+                // box.receiveShadow = true;
+
+                // var colShape = new Ammo.btBoxShape( new Ammo.btVector3( scale.x * 0.5, scale.y * 0.5, scale.z * 0.5 ) );
+                // colShape.setMargin( 0.01 );
+
+                // createRigidObjects(box, compoundShape_cart, mass, pos, quat, 15, 15);
+
+                // //cylinder
+                // var pos = {x: 20, y: 10, z: 0};
+                // var radius = 80 * 0.004;
+                // var width = 80*0.02;
+                // var quat_c = {x: Math.sqrt(2)/2, y: 0, z: 0, w: Math.sqrt(2)/2};
+                // var mass = 1;
+
+                // var cylinder = new THREE.Mesh(new THREE.CylinderGeometry(radius, radius, width, 5, 1), new THREE.MeshPhongMaterial({color: 0xff0036}));
+                // cylinder.name = 'cylinder';
+                // cylinder.position.set(pos.x, pos.y, pos.z);
+                // cylinder.castShadow = true;
+                // cylinder.receiveShadow = true;
+
+                // var colShape = new Ammo.btCylinderShape( new Ammo.btVector3(radius, width * 0.5, radius));
+                // colShape.setMargin( 0.01 );
+
+                // createRigidObjects(cylinder, colShape, mass, pos, quat_c, 15, 15);
+
+                */
+
+                }
+
+            function createcolShape_rod(){
+                var quat = {x: 0, y: 0, z: 0, w: 1};
+
+                //compoundshape
+                var pos1 = {x: 0, y: 80*(0.0045), z: 0};
+                var pos2 = {x: 0, y: - 80*(0.1495), z: 0};
+                var pos2_1 = {x: 80*0.0045, y: - 80*(0.145), z: 0};
+                var pos2_2 = {x: -80*0.0045, y: - 80*(0.145), z: 0};
+                var pos3 = {x: 10, y: 35, z: 0}; //5+80*0.0025
+
+
+                var scale1 = {x: 80*0.01, y: 80*0.291, z: 80*0.005};
+                var scale2 = {x: 80*0.01, y: 80*0.001, z: 80*0.005};
+                var scale2_1 = {x: 80*0.001, y: 80*0.008, z: 80*0.005};
+                var scale2_2 = {x: 80*0.001, y: 80*0.008, z: 80*0.005};
+                // var quat = {x: 0, y: 0, z: 0, w: 1};
+                var mass1 = 1;
+                var mass2 = 1;
+                var mass2_1 = 1;
+                var mass2_2 = 1;
+
+                // var blockGroup = new THREE.Group();
+
+                var transform1 = new Ammo.btTransform();
+                var transform2 = new Ammo.btTransform();
+                var transform2_1 = new Ammo.btTransform();
+                var transform2_2 = new Ammo.btTransform();
+                var transform3 = new Ammo.btTransform();               
+
+                // //Block1 Graphics
+                // var block1 = new THREE.Mesh(new THREE.BoxBufferGeometry(), new THREE.MeshPhongMaterial({color: 0x78d663}));
+
+                // block1.position.set(pos1.x, pos1.y, pos1.z);
+                // block1.scale.set(scale1.x, scale1.y, scale1.z);             
+                // block1.castShadow = true;
+                // block1.receiveShadow = true;
+
+                // blockGroup.add(block1);
+
+                //Block1 Physics
+                transform1.setIdentity();
+                transform1.setOrigin( new Ammo.btVector3( pos1.x, pos1.y, pos1.z ) );
+                transform1.setRotation( new Ammo.btQuaternion( quat.x, quat.y, quat.z, quat.w ) );
+
+
+                var blockColShape1 = new Ammo.btBoxShape( new Ammo.btVector3( scale1.x * 0.5, scale1.y * 0.5, scale1.z * 0.5 ) );
+                blockColShape1.setMargin( 0.01 );           
+
+
+
+                // //Block2 Graphics
+                // var block2 = new THREE.Mesh(new THREE.BoxBufferGeometry(), new THREE.MeshPhongMaterial({color: 0xf78a1d}));
+
+                // block2.position.set(pos2.x, pos2.y, pos2.z);
+                // block2.scale.set(scale2.x, scale2.y, scale2.z);
+                // block2.castShadow = true;
+                // block2.receiveShadow = true;            
+
+                // blockGroup.add(block2);
+
+
+                //Block2 Physics
+                transform2.setIdentity();
+                transform2.setOrigin( new Ammo.btVector3( pos2.x, pos2.y, pos2.z ) );
+                transform2.setRotation( new Ammo.btQuaternion( quat.x, quat.y, quat.z, quat.w ) );
+
+
+                var blockColShape2 = new Ammo.btBoxShape( new Ammo.btVector3( scale2.x * 0.5, scale2.y * 0.5, scale2.z * 0.5 ) );
+                blockColShape2.setMargin( 0.01 );
+
+
+                // //Block2_1 Graphics
+                // var block2_1 = new THREE.Mesh(new THREE.BoxBufferGeometry(), new THREE.MeshPhongMaterial({color: 0xf78a1d}));
+
+                // block2_1.position.set(pos2_1.x, pos2_1.y, pos2_1.z);
+                // block2_1.scale.set(scale2_1.x, scale2_1.y, scale2_1.z);
+                // block2_1.castShadow = true;
+                // block2_1.receiveShadow = true;            
+
+                // blockGroup.add(block2_1);
+                
+
+                //Block2_1 Physics
+                transform2_1.setIdentity();
+                transform2_1.setOrigin( new Ammo.btVector3( pos2_1.x, pos2_1.y, pos2_1.z ) );
+                transform2_1.setRotation( new Ammo.btQuaternion( quat.x, quat.y, quat.z, quat.w ) );
+
+
+                var blockColShape2_1 = new Ammo.btBoxShape( new Ammo.btVector3( scale2_1.x * 0.5, scale2_1.y * 0.5, scale2_1.z * 0.5 ) );
+                blockColShape2_1.setMargin( 0.01 );
+
+                // //Block2_2 Graphics
+                // var block2_2 = new THREE.Mesh(new THREE.BoxBufferGeometry(), new THREE.MeshPhongMaterial({color: 0xf78a1d}));
+
+                // block2_2.position.set(pos2_2.x, pos2_2.y, pos2_2.z);
+                // block2_2.scale.set(scale2_2.x, scale2_2.y, scale2_2.z);
+                // block2_2.castShadow = true;
+                // block2_2.receiveShadow = true;            
+
+                // blockGroup.add(block2_2);
+                // scene.add(blockGroup);
+
+                //Block2_2 Physics
+                transform2_2.setIdentity();
+                transform2_2.setOrigin( new Ammo.btVector3( pos2_2.x, pos2_2.y, pos2_2.z ) );
+                transform2_2.setRotation( new Ammo.btQuaternion( quat.x, quat.y, quat.z, quat.w ) );
+
+
+                var blockColShape2_2 = new Ammo.btBoxShape( new Ammo.btVector3( scale2_2.x * 0.5, scale2_2.y * 0.5, scale2_2.z * 0.5 ) );
+                blockColShape2_2.setMargin( 0.01 );
+
+                
+                compoundShape_rod.addChildShape(transform1, blockColShape1);
+                compoundShape_rod.addChildShape(transform2, blockColShape2);
+                compoundShape_rod.addChildShape(transform2_1, blockColShape2_1);
+                compoundShape_rod.addChildShape(transform2_2, blockColShape2_2);
+
+                // transform3.setIdentity();
+                // transform3.setOrigin( new Ammo.btVector3( pos3.x, pos3.y, pos3.z ) );
+                // transform3.setRotation( new Ammo.btQuaternion( quat.x, quat.y, quat.z, quat.w ) );
+                // var motionState = new Ammo.btDefaultMotionState( transform3 );                      
+
+                // var totalMass = mass1 + mass2 + mass2_1 + mass2_2;
+
+                // localInertia = new Ammo.btVector3( 0, 0, 0 );
+                // compoundShape_rod.calculateLocalInertia( totalMass, localInertia );
+
+                // rbInfo = new Ammo.btRigidBodyConstructionInfo( totalMass, motionState, compoundShape_rod, localInertia );
+                // var compoundBody = new Ammo.btRigidBody( rbInfo );
+                // compoundBody.setActivationState( STATE.DISABLE_DEACTIVATION );
+                // physicsWorld.addRigidBody( compoundBody, 15, 15 );//, colGroupGreenBall, colGroupPlane | colGroupRedBall | colGroupGreenBall  );
+
+                // blockGroup.userData.physicsBody = compoundBody;
+                // rigidBodies.push(blockGroup);     
+
+
+                /* Shape Template
+
+                // //red box
+                // var pos = {x: 10, y: 5, z: 0};
+                // var scale = {x: 4.9, y: 4.9, z: 4.9};
+                // var mass = 1;
+
+                // var box = new THREE.Mesh(new THREE.BoxBufferGeometry(), new THREE.MeshPhongMaterial({color: 0xff0036}));
+                // box.name = 'box';
+                // box.position.set(pos.x, pos.y, pos.z);
+                // box.scale.set(scale.x, scale.y, scale.z);
+                // box.castShadow = true;
+                // box.receiveShadow = true;
+
+                // var colShape = new Ammo.btBoxShape( new Ammo.btVector3( scale.x * 0.5, scale.y * 0.5, scale.z * 0.5 ) );
+                // colShape.setMargin( 0.01 );
+
+                // createRigidObjects(box, compoundShape_cart, mass, pos, quat, 15, 15);
+
+                // //cylinder
+                // var pos = {x: 20, y: 10, z: 0};
+                // var radius = 80 * 0.004;
+                // var width = 80*0.02;
+                // var quat_c = {x: Math.sqrt(2)/2, y: 0, z: 0, w: Math.sqrt(2)/2};
+                // var mass = 1;
+
+                // var cylinder = new THREE.Mesh(new THREE.CylinderGeometry(radius, radius, width, 5, 1), new THREE.MeshPhongMaterial({color: 0xff0036}));
+                // cylinder.name = 'cylinder';
+                // cylinder.position.set(pos.x, pos.y, pos.z);
+                // cylinder.castShadow = true;
+                // cylinder.receiveShadow = true;
+
+                // var colShape = new Ammo.btCylinderShape( new Ammo.btVector3(radius, width * 0.5, radius));
+                // colShape.setMargin( 0.01 );
+
+                // createRigidObjects(cylinder, colShape, mass, pos, quat_c, 15, 15);
+
+                */
+
+                }
+
+            function LoadParts(){
+
+                var scale = {x: 80, y: 80, z: 80};
+
+                var loader = new THREE.GLTFLoader();
+                loader.load( 'pendulum_v4_rotate2.glb', function ( gltf ) {
+
+                    gltf.scene.traverse( function ( child ) {
+
+                        if ( child.isMesh ) {
+                            child.scale.set(scale.x, scale.y, scale.z);
+                            // console.log(child);
+                            child.receiveShadow = true;
+                            child.castShadow = true;
+                            if (child.name=="rod"){
+                            rod = child;
+                            }
+                            if (child.name=="cart"){
+                            cart = child; 
+                            }				
+                            if (child.name=="track"){
+                            track = child; 
+                            }	
+                            if (child.name=="tracksup1"){
+                            tracksup1 = child; 
+                            }
+                            if (child.name=="tracksup2"){
+                            tracksup2 = child; 
+                            }
+                        }
+
+                    } );
+
+                    //rod
+                    var pos_rod = {x: 0, y: scale.y * (0.0025 + 0.1625), z: 0};
+                    // var quat_rod = {x: Math.sqrt(2)/2, y: 0, z: 0, w: Math.sqrt(2)/2}; //90
+                    // var quat_rod = {x: 1/2, y: 0, z: 0, w: Math.sqrt(3)/2}; //45
+                    var quat_rod = {x: 0, y: 0, z: 0, w: 1}; //0
+                    var mass_rod = 1;
+
+                    // /*Old colShape replaced by compoundShape_rod*/
+                    // var colShape_rod = new Ammo.btBoxShape( new Ammo.btVector3( scale.x * 0.5 *0.01, scale.y * 0.5 * 0.3, scale.z * 0.5 * 0.005 ) );
+                    // colShape_rod.setMargin( 0.01 );
+
+                    createRigidObjects(rod, compoundShape_rod, mass_rod, pos_rod, quat_rod, 2, 5);
+
+                    //cart
+                    var pos_cart = {x: 0, y: scale.y * 0.0025, z: 0};
+                    // var quat_cart = {x: Math.sqrt(2)/2, y: 0, z: 0, w: Math.sqrt(2)/2}; //90 
+                    // var quat_cart = {x: 1, y: 0, z: 0, w: 0}; //180
+                    var quat_cart = {x: 0, y: 0, z: 0, w: 1}; //0
+                    var mass_cart = 1;
+
+                    cart.position.set(pos_cart.x, pos_cart.y, pos_cart.z);
+
+                    // /*Old colShape replaced by compoundShape_cart*/
+                    // var colShape_cart = new Ammo.btBoxShape( new Ammo.btVector3( scale.x * 0.5 *0.04, scale.y * 0.5 * 0.015, scale.z * 0.5 * 0.045 ) );
+                    // colShape_cart.setMargin( 0.01 );
+
+                    createRigidObjects(cart, compoundShape_cart, mass_cart, pos_cart, quat_cart, 15, 15);
+
+                    //track
+                    var pos_track = {x: 0, y: scale.y * 0.0025, z: 0};
+                    // var quat_track = {x: Math.sqrt(2)/2, y: 0, z: 0, w: Math.sqrt(2)/2}; //90 
+                    var quat_track = {x: 0, y: 0, z: 0, w: 1}; //0 
+                    var mass_track = 0;
+
+                    track.position.set(pos_track.x, pos_track.y, pos_track.z);
+
+                    var colShape_track = new Ammo.btBoxShape( new Ammo.btVector3( scale.x * 0.5 *0.75, scale.y * 0.5 * 0.01, scale.z * 0.5 * 0.04 ) );
+                    colShape_track.setMargin( 0.01 );
+
+                    createRigidObjects(track, colShape_track, mass_track, pos_track, quat_track, 0, 0);
+                    
+                    //tracksup1
+                    var pos_tracksup1 = {x: scale.x * 0.3875, y: 0, z: 0};
+                    // var quat_tracksup1 = {x: Math.sqrt(2)/2, y: 0, z: 0, w: Math.sqrt(2)/2}; //90 
+                    var quat_tracksup1 = {x: 0, y: 0, z: 0, w: 1}; //0 
+                    var mass_tracksup1 = 0;
+
+                    tracksup1.position.set(pos_tracksup1.x, pos_tracksup1.y, pos_tracksup1.z);
+
+                    var colShape_tracksup1 = new Ammo.btBoxShape( new Ammo.btVector3( scale.x * 0.5 *0.025, scale.y * 0.5 * 0.03, scale.z * 0.5 * 0.05 ) );
+                    colShape_tracksup1.setMargin( 0.01 );
+
+                    createRigidObjects(tracksup1, colShape_tracksup1, mass_tracksup1, pos_tracksup1, quat_tracksup1, 1, 2);
+
+                    //tracksup2
+                    var pos_tracksup2 = {x: - scale.x * 0.3875, y: 0, z: 0};
+                    // var quat_tracksup2 = {x: Math.sqrt(2)/2, y: 0, z: 0, w: Math.sqrt(2)/2}; //90 
+                    var quat_tracksup2 = {x: 0, y: 0, z: 0, w: 1}; //0 
+                    var mass_tracksup2 = 0;
+
+                    tracksup2.position.set(pos_tracksup2.x, pos_tracksup2.y, pos_tracksup2.z);
+                    // tracksup2.rotation.set(quat_tracksup2.x, quat_tracksup2.y, quat_tracksup2.z, quat_tracksup2.w);
+
+                    var colShape_tracksup2 = new Ammo.btBoxShape( new Ammo.btVector3( scale.x * 0.5 *0.025, scale.y * 0.5 * 0.03, scale.z * 0.5 * 0.05 ) );
+                    colShape_tracksup2.setMargin( 0.01 );
+
+                    createRigidObjects(tracksup2, colShape_tracksup2, mass_tracksup2, pos_tracksup2, quat_tracksup2, 1, 2);
+
+                    //create joint: cart_rod
+                    var rod_Pivot = new Ammo.btVector3( 0, - 0.145 * scale.y, 0 );
+                    var cart_Pivot = new Ammo.btVector3( 0, 0.0175 * scale.y, 0 );
+                    var rod_axis = new Ammo.btVector3( 0, 0, 1 );
+                    var cart_axis = new Ammo.btVector3( 0, 0, 1 ); 
+
+                    var cart_rod = new Ammo.btHingeConstraint( rod.userData.physicsBody, cart.userData.physicsBody, rod_Pivot, cart_Pivot, rod_axis, cart_axis, false);
+                    
+                    physicsWorld.addConstraint( cart_rod, false );
+
+                    //create joint: cart_track btGeneric6DofConstraint version: allows more settings
+
+                    var frameInA = new Ammo.btTransform();
+                    frameInA.setIdentity();
+                    var frameInB = new Ammo.btTransform();
+                    frameInB.setIdentity();
+
+                    var cart_track = new Ammo.btGeneric6DofConstraint( cart.userData.physicsBody, track.userData.physicsBody, frameInA, frameInB, false);
+                    cart_track.setLinearUpperLimit (new Ammo.btVector3( 0, 0, 0 ));
+                    cart_track.setLinearLowerLimit (new Ammo.btVector3( 1, 0, 0 ));
+                    cart_track.setAngularUpperLimit (new Ammo.btVector3( 0, 0, 0 ));
+                    cart_track.setAngularLowerLimit (new Ammo.btVector3( 0, 0, 0 ));
+                    physicsWorld.addConstraint( cart_track, false );
+
+
+                    /*
+                    //create joint: cart_track btSliderConstraint version: X axis only
+
+                    var frameInA = new Ammo.btTransform();
+                    frameInA.setIdentity();
+                    var frameInB = new Ammo.btTransform();
+                    frameInB.setIdentity();
+
+                    var cart_track = new Ammo.btSliderConstraint( cart.userData.physicsBody, track.userData.physicsBody, frameInA, frameInB, false);
+
+                    physicsWorld.addConstraint( cart_track, false );
+                    */
+
+                }); //loader
+                }
+            
+            //control
+            function keyboardInput(){
+
+                window.addEventListener('keydown', function(event){
+                    
+                    switch(event.keyCode){
+                        case 87: //FORWARD
+                        moveDirection.forward = 1;
+                        break;
+                        
+                        case 83: //BACK
+                        moveDirection.back = 1;
+                        break;
+                        
+                        case 65: //LEFT
+                        moveDirection.left = 1;
+                        break;
+                        
+                        case 68: //RIGHT
+                        moveDirection.right = 1;
+                        break;
+                    }
+                });
+                window.addEventListener('keyup', function(event){
+                    
+                    switch(event.keyCode){
+                        case 87: //FORWARD
+                        moveDirection.forward = 0;
+                        break;
+                        
+                        case 83: //BACK
+                        moveDirection.back = 0;
+                        break;
+                        
+                        case 65: //LEFT
+                        moveDirection.left = 0;
+                        break;
+                        
+                        case 68: //RIGHT
+                        moveDirection.right = 0;
+                        break;
+                    }
+                });
+                }
+            
+            function applyForce(object){
+
+                var moveX =  moveDirection.right - moveDirection.left;
+                var moveZ =  moveDirection.back - moveDirection.forward;
+                var moveY =  0; 
+
+                if( moveX == 0 && moveY == 0 && moveZ == 0) return;
+
+                var resultantForce = new Ammo.btVector3( moveX * Force, moveY * Force, moveZ * Force )
+                var physicsBody = object.userData.physicsBody;
+				physicsBody.applyForce(  resultantForce , new Ammo.btVector3( 0, 0, 0 ));
+
+                }
+
+            function renderFrame(){
+
+                requestAnimationFrame( renderFrame );
+                var deltaTime = clock.getDelta();
+                applyForce(cart);
+                // applyForce(blockGroup);
+                updatePhysics( deltaTime );
+                renderer.render( scene, camera );
+
+                }
+
+            function updatePhysics( deltaTime ){
+
+                // Step world
+                physicsWorld.stepSimulation( deltaTime, 10 );
+
+                // Update rigid bodies
+                for ( var i = 0; i < rigidBodies.length; i++ ) {
+                    var objThree = rigidBodies[ i ];
+                    var objAmmo = objThree.userData.physicsBody;
+                    // objAmmo.setCcdMotionThreshold(1);
+                    // objAmmo.setCcdSweptSphereRadius(1);
+                    var motionState = objAmmo.getMotionState();
+                    if ( motionState ) {
+
+                        motionState.getWorldTransform( tmpTransform );
+                        var position = tmpTransform.getOrigin();
+                        var quaternion = tmpTransform.getRotation();
+                        
+                        objThree.position.set( position.x(), position.y(), position.z() );
+
+                        // if (objThree.name == 'rod'){
+                        //     console.log(position.x(), position.y());    
+                        // }
+
+                        objThree.quaternion.set( quaternion.x(), quaternion.y(), quaternion.z(), quaternion.w() );
+
+                    }
+                }
+                }
+        
+        
+        }); 
+
+        </script>
+	</body>
+</html>

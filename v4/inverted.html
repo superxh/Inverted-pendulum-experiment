@@ -1,0 +1,328 @@
+<!DOCTYPE html>
+<html lang="en">
+    <head>
+        <meta charset="utf-8">
+        <title>Inverted pendulum</title>
+        <style>
+            body { margin: 0; }
+        </style>
+    </head>
+	<body>
+        <script src="../js/three.js"></script>
+        <script src="../js/OrbitControls.js"></script>
+        <script src="../js/ammo.js"></script>
+        <script src="../js/GLTFLoader.js"></script>
+        <script>
+
+        Ammo().then(function(Ammo) {
+
+        // varible declaration
+
+        // - global
+        var DISABLE_DEACTIVATION = 4;
+        var TRANSFORM_AUX = new Ammo.btTransform();
+        var ZERO_QUATERNION = new THREE.Quaternion(0, 0, 0, 1);
+
+        // - graphics
+        var container, stats;
+        var camera, controls, scene, renderer;
+        var clock = new THREE.Clock();
+        var materialDynamic, materialStatic, materialInteractive;
+
+        // - physics
+        var gravityConstant = -9.82;
+        var collisionConfiguration;
+        var dispatcher;
+        var broadphase;
+        var solver;
+        var physicsWorld;
+        var rigidBodies = [];
+        var margin = 0.05;
+        var syncList = [];
+        var time = 0;
+        var objectTimePeriod = 3;
+        var timeNextSpawn = time + objectTimePeriod;
+        var maxNumObjects = 30;
+
+        // - key
+        var actions = {};
+        var keysActions = {
+            "KeyA":'left',
+            "KeyD":'right'
+        };
+        
+        // main
+        initGraphics();
+        initPhysics();
+
+        // functions
+
+        function initGraphics() {
+
+            // create scene
+            scene = new THREE.Scene();
+
+            // create camera
+            camera = new THREE.PerspectiveCamera( 60, window.innerWidth / window.innerHeight, 0.2, 5000 );
+            
+            camera.position.set( 70, 30, 0 );
+            camera.lookAt(new THREE.Vector3(0, 0, 0));
+
+            // orbit control
+            controls = new THREE.OrbitControls( camera );
+
+            controls.enableDamping = true; 
+            controls.dampingFactor = 0.05;
+            controls.screenSpacePanning = false;
+            controls.minDistance = 70;
+            controls.maxDistance = 500;
+            controls.maxPolarAngle = Math.PI / 2; 
+
+            // setup renderer
+            renderer = new THREE.WebGLRenderer();
+            renderer.setClearColor( 0xbfd1e5 );
+            renderer.setPixelRatio( window.devicePixelRatio );
+            renderer.setSize( window.innerWidth, window.innerHeight );
+            renderer.shadowMap.enabled = true;
+
+            materialDynamic = new THREE.MeshPhongMaterial( { color:0xfca400 } );
+            materialStatic = new THREE.MeshPhongMaterial( { color:0x999999 } );
+            materialInteractive=new THREE.MeshPhongMaterial( { color:0x990000 } );
+
+            // light
+            var ambientLight = new THREE.AmbientLight( 0x404040 );
+            scene.add( ambientLight );
+
+            var light = new THREE.DirectionalLight( 0xffffff, 1 );
+            light.position.set( 10, 10, 10 );
+            light.castShadow = true;
+            var d = 10;
+            light.shadow.camera.left = -d;
+            light.shadow.camera.right = d;
+            light.shadow.camera.top = d;
+            light.shadow.camera.bottom = -d;
+
+            light.shadow.camera.near = 2;
+            light.shadow.camera.far = 500;
+
+            light.shadow.mapSize.x = 1024;
+            light.shadow.mapSize.y = 1024;
+
+            scene.add( light );
+        }
+
+        function initPhysics() {
+
+            // physics configuration
+
+            collisionConfiguration = new Ammo.btDefaultCollisionConfiguration();
+            dispatcher = new Ammo.btCollisionDispatcher( collisionConfiguration );
+            broadphase = new Ammo.btDbvtBroadphase();
+            solver = new Ammo.btSequentialImpulseConstraintSolver();
+            physicsWorld = new Ammo.btDiscreteDynamicsWorld( dispatcher, broadphase, solver, collisionConfiguration);
+            physicsWorld.setGravity( new Ammo.btVector3( 0, gravityConstant, 0 ) );
+        }
+
+        function tick() {
+            requestAnimationFrame( tick );
+            var dt = clock.getDelta();
+            for (var i = 0; i < syncList.length; i++)
+                syncList[i](dt);
+            physicsWorld.stepSimulation( dt, 10 );
+            controls.update( dt );
+            renderer.render( scene, camera );
+            time += dt;
+            stats.update();
+        }
+        
+        function keyup(e) {
+            if(keysActions[e.code]) {
+                actions[keysActions[e.code]] = false;
+                e.preventDefault();
+                e.stopPropagation();
+                return false;
+            }
+        }
+
+        function keydown(e) {
+            if(keysActions[e.code]) {
+                actions[keysActions[e.code]] = true;
+                e.preventDefault();
+                e.stopPropagation();
+                return false;
+            }
+        }
+
+        function createBox(pos, quat, w, l, h, mass, friction) {
+            var material = mass > 0 ? materialDynamic : materialStatic;
+            var shape = new THREE.BoxGeometry(w, l, h, 1, 1, 1);
+            var geometry = new Ammo.btBoxShape(new Ammo.btVector3(w * 0.5, l * 0.5, h * 0.5));
+
+            if(!mass) mass = 0;
+            if(!friction) friction = 1;
+
+            var mesh = new THREE.Mesh(shape, material);
+            mesh.position.copy(pos);
+            mesh.quaternion.copy(quat);
+            scene.add( mesh );
+
+            var transform = new Ammo.btTransform();
+            transform.setIdentity();
+            transform.setOrigin(new Ammo.btVector3(pos.x, pos.y, pos.z));
+            transform.setRotation(new Ammo.btQuaternion(quat.x, quat.y, quat.z, quat.w));
+            var motionState = new Ammo.btDefaultMotionState(transform);
+
+            var localInertia = new Ammo.btVector3(0, 0, 0);
+            geometry.calculateLocalInertia(mass, localInertia);
+
+            var rbInfo = new Ammo.btRigidBodyConstructionInfo(mass, motionState, geometry, localInertia);
+            var body = new Ammo.btRigidBody(rbInfo);
+
+            body.setFriction(friction);
+            //body.setRestitution(.9);
+            //body.setDamping(0.2, 0.2);
+
+            physicsWorld.addRigidBody( body );
+
+            if (mass > 0) {
+                body.setActivationState(DISABLE_DEACTIVATION);
+                // Sync physics and graphics
+                function sync(dt) {
+                    var ms = body.getMotionState();
+                    if (ms) {
+                        ms.getWorldTransform(TRANSFORM_AUX);
+                        var p = TRANSFORM_AUX.getOrigin();
+                        var q = TRANSFORM_AUX.getRotation();
+                        mesh.position.set(p.x(), p.y(), p.z());
+                        mesh.quaternion.set(q.x(), q.y(), q.z(), q.w());
+                    }
+                }
+
+                syncList.push(sync);
+            }
+        }
+        
+        function LoadParts(){
+            let scale = {x: 80, y: 80, z: 80};
+
+            let loader = new THREE.GLTFLoader();
+            loader.load( 'pendulum_v2.glb', function ( gltf ) {
+
+                gltf.scene.traverse( function ( child ) {
+
+                    if ( child.isMesh ) {
+                        child.scale.set(scale.x, scale.y, scale.z);
+                        child.receiveShadow = true;
+                        child.castShadow = true;
+                        if (child.name=="rod"){
+                        rod = child;
+                        }
+                        if (child.name=="cart"){
+                        cart = child; 
+                        }				
+                        if (child.name=="track"){
+                        track = child; 
+                        }	
+                    }
+
+                } );
+
+                //rod
+                let pos_rod = {x: 0, y: 35, z: 0};
+                // let quat_rod = {x: Math.sqrt(2)/2, y: 0, z: 0, w: Math.sqrt(2)/2}; //90
+                let quat_rod = {x: 1/2, y: 0, z: 0, w: Math.sqrt(3)/2}; //90  
+                // let quat = {x: 1, y: 0, z: 0, w: 0}; //180
+                let mass_rod = 1;
+
+                rod.position.set(pos_rod.x, pos_rod.y, pos_rod.z);
+                scene.add( rod );
+
+                //Ammojs Section
+                let transform = new Ammo.btTransform();
+                transform.setIdentity();
+                transform.setOrigin( new Ammo.btVector3( pos_rod.x, pos_rod.y, pos_rod.z ) );
+                transform.setRotation( new Ammo.btQuaternion( quat_rod.x, quat_rod.y, quat_rod.z, quat_rod.w ) );
+                let motionState = new Ammo.btDefaultMotionState( transform );
+
+                let colShape_rod = new Ammo.btBoxShape( new Ammo.btVector3( scale.x * 0.5 *0.005, scale.y * 0.5 * 0.01, scale.z * 0.5 * 0.3 ) );
+                colShape_rod.setMargin( 0.05 );
+
+                let localInertia = new Ammo.btVector3( 0, 0, 0 );
+                colShape_rod.calculateLocalInertia( mass_rod, localInertia );
+
+                let rbInfo = new Ammo.btRigidBodyConstructionInfo( mass_rod, motionState, colShape_rod, localInertia );
+                let body_rod = new Ammo.btRigidBody( rbInfo );
+
+
+                physicsWorld.addRigidBody( body_rod );
+
+                rod.userData.physicsBody = body_rod;
+                rigidBodies.push(rod);
+
+                //cart
+                let pos_cart = {x: 0, y: 20, z: 0};
+                let quat_cart = {x: Math.sqrt(2)/2, y: 0, z: 0, w: Math.sqrt(2)/2}; //90 
+                // let quat_cart = {x: 1, y: 0, z: 0, w: 0}; //180
+                let mass_cart = 1;
+
+                cart.position.set(pos_cart.x, pos_cart.y, pos_cart.z);
+                scene.add( cart );
+
+                //Ammojs Section
+                transform.setIdentity();
+                transform.setOrigin( new Ammo.btVector3( pos_cart.x, pos_cart.y, pos_cart.z ) );
+                transform.setRotation( new Ammo.btQuaternion( quat_cart.x, quat_cart.y, quat_cart.z, quat_cart.w ) );
+                motionState = new Ammo.btDefaultMotionState( transform );
+
+                let colShape_cart = new Ammo.btBoxShape( new Ammo.btVector3( scale.x * 0.5 *0.045, scale.y * 0.5 * 0.04, scale.z * 0.5 * 0.02 ) );
+                colShape_cart.setMargin( 0.05 );
+
+                localInertia = new Ammo.btVector3( 0, 0, 0 );
+                colShape_cart.calculateLocalInertia( mass_cart, localInertia );
+
+                rbInfo = new Ammo.btRigidBodyConstructionInfo( mass_cart, motionState, colShape_cart, localInertia );
+                let body_cart = new Ammo.btRigidBody( rbInfo );
+
+
+                physicsWorld.addRigidBody( body_cart );
+
+                cart.userData.physicsBody = body_cart;
+                rigidBodies.push(cart);
+
+                //track
+                let pos_track = {x: -20, y: 10, z: 0};
+                let quat_track = {x: 1, y: 0, z: 0, w: 0}; //180 
+                // let quat = {x: 1, y: 0, z: 0, w: 0}; //180
+                let mass_track = 1;
+
+                track.position.set(pos_track.x, pos_track.y, pos_track.z);
+                scene.add( track );
+
+                //Ammojs Section
+                transform.setIdentity();
+                transform.setOrigin( new Ammo.btVector3( pos_track.x, pos_track.y, pos_track.z ) );
+                transform.setRotation( new Ammo.btQuaternion( quat_track.x, quat_track.y, quat_track.z, quat_track.w ) );
+                motionState = new Ammo.btDefaultMotionState( transform );
+
+                let colShape_track = new Ammo.btBoxShape( new Ammo.btVector3( scale.x * 0.5 *0.05, scale.y * 0.5 * 0.025, scale.z * 0.5 * 0.74 ) );
+                colShape_track.setMargin( 0.05 );
+
+                localInertia = new Ammo.btVector3( 0, 0, 0 );
+                colShape_track.calculateLocalInertia( mass_track, localInertia );
+
+                rbInfo = new Ammo.btRigidBodyConstructionInfo( mass_track, motionState, colShape_track, localInertia );
+                let body_track = new Ammo.btRigidBody( rbInfo );
+
+
+                physicsWorld.addRigidBody( body_track );
+
+                track.userData.physicsBody = body_track;
+                rigidBodies.push(track);
+            }); //loader
+        }
+
+        });
+
+        </script>
+	</body>
+</html>

@@ -1,0 +1,274 @@
+<!DOCTYPE html>
+<html lang="en">
+    <head>
+        <meta charset="utf-8">
+        <title>Inverted pendulum</title>
+        <style>
+            body { margin: 0; }
+        </style>
+    </head>
+	<body>
+        <script src="../js/three.js"></script>
+        <script src="../js/OrbitControls.js"></script>
+        <script src="../js/ammo.js"></script>
+        <script src="../js/GLTFLoader.js"></script>
+        <script>
+
+        Ammo().then(function(Ammo) { 
+
+        // variable declaration
+            // - global
+            var axisZ = 0;
+            var axisX = 0;
+            // - graphics
+            var camera, controls, scene, renderer;
+            var clock = new THREE.Clock();
+            // - physics
+            var physicsWorld;
+            var collisionConfiguration;
+            var dispatcher;
+            var overlappingPairCache;
+            var solver;
+            var gravityConstant = -9.82;
+            var rigidBodies = [];
+            var tmpTransform = new Ammo.btTransform();
+            // - key
+
+        // main program
+            setupPhysicsWorld();
+            setupGraphics();
+            createPlatform();
+            LoadParts();
+            keyboardInput();
+            renderFrame();
+        // functions
+
+            function setupPhysicsWorld(){
+
+                collisionConfiguration  = new Ammo.btDefaultCollisionConfiguration();
+                dispatcher              = new Ammo.btCollisionDispatcher(collisionConfiguration);
+                overlappingPairCache    = new Ammo.btDbvtBroadphase();
+                solver                  = new Ammo.btSequentialImpulseConstraintSolver();
+
+                physicsWorld           = new Ammo.btDiscreteDynamicsWorld(dispatcher, overlappingPairCache, solver, collisionConfiguration);
+                physicsWorld.setGravity(new Ammo.btVector3(0, gravityConstant, 0));
+
+                } 
+
+            function setupGraphics(){
+                
+                // create scene
+                scene = new THREE.Scene();
+                scene.background = new THREE.Color( 0xbfd1e5 );
+
+                // create camera
+                camera = new THREE.PerspectiveCamera( 60, window.innerWidth / window.innerHeight, 0.2, 5000 );
+                
+                camera.position.set( 70, 30, 0 );
+                camera.lookAt(new THREE.Vector3(0, 0, 0));
+
+                // light
+                var ambientLight = new THREE.AmbientLight( 0xffffff );
+                scene.add( ambientLight );
+
+                var light = new THREE.DirectionalLight( 0xffffff, 1 );
+                light.position.set( 100, 200, 100 );
+                light.castShadow = true;
+                var d = 50;
+                light.shadow.camera.left = -d;
+                light.shadow.camera.right = d;
+                light.shadow.camera.top = d;
+                light.shadow.camera.bottom = -d;
+
+                light.shadow.camera.near = 2;
+                light.shadow.camera.far = 500;
+
+                light.shadow.mapSize.x = 1024;
+                light.shadow.mapSize.y = 1024;
+
+                scene.add( light );
+
+                // setup renderer
+                renderer = new THREE.WebGLRenderer( { antialias: true } );
+                renderer.setClearColor( 0xbfd1e5 );
+                renderer.setPixelRatio( window.devicePixelRatio );
+                renderer.setSize( window.innerWidth, window.innerHeight );
+                document.body.appendChild( renderer.domElement );
+                renderer.shadowMap.enabled = true;
+
+                // orbit control
+                controls = new THREE.OrbitControls( camera, renderer.domElement );
+
+                controls.enableDamping = true; 
+                controls.dampingFactor = 0.05;
+                controls.screenSpacePanning = false;
+                controls.minDistance = 70;
+                controls.maxDistance = 500;
+                controls.maxPolarAngle = Math.PI / 2; 
+
+                }
+            
+            function createRigidObjects(object, colShape, mass, position, quaternion){
+                
+                var transform = new Ammo.btTransform();
+                transform.setIdentity();
+                transform.setOrigin(new Ammo.btVector3(position.x, position.y, position.z));
+                transform.setRotation(new Ammo.btQuaternion(quaternion.x, quaternion.y, quaternion.z, quaternion.w));
+                var motionState = new Ammo.btDefaultMotionState(transform);
+                var localInertia = new Ammo.btVector3(0, 0, 0);
+                colShape.calculateLocalInertia(mass, localInertia);
+                var rigidBodyInfo = new Ammo.btRigidBodyConstructionInfo(mass, motionState, colShape, localInertia);
+                var rigidBody = new Ammo.btRigidBody(rigidBodyInfo);
+                object.userData.physicsBody = rigidBody;
+                
+                scene.add(object);
+
+                if ( mass > 0 ){
+                    rigidBodies.push(object);
+                }
+
+                physicsWorld.addRigidBody(rigidBody);
+
+                }
+
+            function createPlatform(){
+                
+                var pos = {x: 0, y: 0, z: 0};
+                var scale = {x: 50, y: 1, z: 80};
+                var quat = {x: 0, y: 0, z: 0, w: 1};
+                var mass = 0;
+
+                var blockPlane = new THREE.Mesh(new THREE.BoxBufferGeometry(), new THREE.MeshPhongMaterial({color: 0xa0afa4}));
+                blockPlane.scale.set(scale.x, scale.y, scale.z);
+                blockPlane.castShadow = true;
+                blockPlane.receiveShadow = true;
+
+                var colShape = new Ammo.btBoxShape( new Ammo.btVector3( scale.x * 0.5, scale.y * 0.5, scale.z * 0.5 ) );
+                colShape.setMargin( 0.05 );
+
+                createRigidObjects(blockPlane, colShape, mass, pos, quat);
+
+                }
+
+            function LoadParts(){
+
+                var scale = {x: 80, y: 80, z: 80};
+
+                var loader = new THREE.GLTFLoader();
+                loader.load( 'pendulum_v2.glb', function ( gltf ) {
+
+                    gltf.scene.traverse( function ( child ) {
+
+                        if ( child.isMesh ) {
+                            child.scale.set(scale.x, scale.y, scale.z);
+                            child.receiveShadow = true;
+                            child.castShadow = true;
+                            if (child.name=="rod"){
+                            rod = child;
+                            }
+                            if (child.name=="cart"){
+                            cart = child; 
+                            }				
+                            if (child.name=="track"){
+                            track = child; 
+                            }	
+                        }
+
+                    } );
+
+                    //track
+                    var pos_track = {x: 0, y: 10, z: 0};
+                    var quat_track = {x: 1, y: 0, z: 0, w: 0}; //180 
+                    // var quat_track = {x: 0, y: 0, z: 0, w: 1}; //0 
+                    var mass_track = 1;
+
+                    var colShape_track = new Ammo.btBoxShape( new Ammo.btVector3( scale.x * 0.5 *0.05, scale.y * 0.5 * 0.025, scale.z * 0.5 * 0.74 ) );
+                    colShape_track.setMargin( 0.05 );
+
+                    createRigidObjects(track, colShape_track, mass_track, pos_track, quat_track);
+                    
+                }); //loader
+                }
+            
+            //control
+            function keyboardInput(){
+
+                window.addEventListener('keydown', function(event){
+                    //console.log(event.keyCode);
+                    switch(event.keyCode){
+                        case 87: //W
+                        axisZ = -1;
+                        break;
+                        case 83: //S
+                        axisZ = 1;
+                        break;
+                        case 65: //A
+                        axisX = -1;
+                        break;
+                        case 68: //D
+                        axisX = 1;
+                        break;
+                    }
+                });
+                window.addEventListener('keyup', function(event){
+                    //console.log(event.keyCode);
+                    switch(event.keyCode){
+                        case 87: //W
+                        axisZ = 0;
+                        break;
+                        case 83: //S
+                        axisZ = 0;
+                        break;
+                        case 65: //A
+                        axisX = 0;
+                        break;
+                        case 68: //D
+                        axisX = 0;
+                        break;
+                    }
+                });
+                }
+            
+
+            function renderFrame(){
+
+                requestAnimationFrame( renderFrame );
+                var deltaTime = clock.getDelta();
+                updatePhysics( deltaTime );
+                renderer.render( scene, camera );
+
+                }
+
+            function updatePhysics( deltaTime ){
+
+                // Step world
+                physicsWorld.stepSimulation( deltaTime, 10 );
+
+                // Update rigid bodies
+                for ( var i = 0; i < rigidBodies.length; i++ ) {
+                    var objThree = rigidBodies[ i ];
+                    var objAmmo = objThree.userData.physicsBody;
+                    var motionState = objAmmo.getMotionState();
+                    if ( motionState ) {
+
+                        motionState.getWorldTransform( tmpTransform );
+                        var position = tmpTransform.getOrigin();
+                        var quaternion = tmpTransform.getRotation();
+                        
+                        // if ( objThree.name == 'track' ) {
+                        //     objAmmo.setLinearVelocity(new Ammo.btVector3(objAmmo.GetLinearVelocity().x() + axisX, objAmmo.GetLinearVelocity().y(), objAmmo.GetLinearVelocity().z() + axisZ));
+                        // }
+                        
+                        objThree.position.set( position.x(), position.y(), position.z() );
+                        objThree.quaternion.set( quaternion.x(), quaternion.y(), quaternion.z(), quaternion.w() );
+
+                    }
+                }
+                }
+        
+        
+        }); 
+
+        </script>
+	</body>
+</html>

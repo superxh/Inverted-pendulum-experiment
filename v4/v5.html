@@ -1,0 +1,425 @@
+<!DOCTYPE html>
+<html lang="en">
+    <head>
+        <meta charset="utf-8">
+        <title>Inverted pendulum</title>
+        <style>
+            body { margin: 0; }
+            #info {
+                position: absolute;
+                top: 0px; left: 200px; width: 300px;
+                padding: 5px;
+            }
+        </style>
+    </head>
+	<body>
+        <div id="info">Ammo.js Inverted Pendulum Demo<br>Green: Axis-X<br>Red: Axis-Y<br>press A, D to apply force </div>
+
+        <script src="../js/three.js"></script>
+        <script src="../js/OrbitControls.js"></script>
+        <script src="../js/ammo.js"></script>
+        <script src="../js/GLTFLoader.js"></script>
+        <script src="../js/WebGL.js"></script>
+        <script src="../js/smoothie.js"></script>
+
+        <canvas id="mycanvas" width="200" height="100" style="position:absolute; top:0px; left:0px"></canvas>
+
+        <script>
+
+        Ammo().then(function(Ammo) { 
+            //MIT license
+        // variable declaration
+            // - global
+            var rod, cart, track, tracksup1, tracksup2;
+            var Force = 100;
+            const STATE = { DISABLE_DEACTIVATION : 4 };
+            // - graphics
+            var camera, controls, scene, renderer;
+            var clock = new THREE.Clock();
+            // - physics
+            var physicsWorld;
+            var collisionConfiguration;
+            var dispatcher;
+            var overlappingPairCache;
+            var solver;
+            var gravityConstant = -9.82;
+            var rigidBodies = [];
+            var tmpTransform = new Ammo.btTransform();
+            // - key
+            var moveDirection = { left: 0, right: 0, forward: 0, back: 0 };
+            // - chart
+            var smoothie;
+            var lineX_t = new TimeSeries();
+            var lineY_t = new TimeSeries();
+
+        // main program
+            setupPhysicsWorld();
+            setupGraphics();
+            // createPlatform();
+            LoadParts();
+            keyboardInput();
+            renderFrame();
+        // functions
+
+            function setupPhysicsWorld(){
+
+                collisionConfiguration  = new Ammo.btDefaultCollisionConfiguration();
+                dispatcher              = new Ammo.btCollisionDispatcher(collisionConfiguration);
+                overlappingPairCache    = new Ammo.btDbvtBroadphase();
+                solver                  = new Ammo.btSequentialImpulseConstraintSolver();
+
+                physicsWorld           = new Ammo.btDiscreteDynamicsWorld(dispatcher, overlappingPairCache, solver, collisionConfiguration);
+                physicsWorld.setGravity(new Ammo.btVector3(0, gravityConstant, 0));
+
+                } 
+
+            function setupGraphics(){
+                
+                // create scene
+                scene = new THREE.Scene();
+                scene.background = new THREE.Color( 0xbfd1e5 );
+
+                // create camera
+                camera = new THREE.PerspectiveCamera( 60, window.innerWidth / window.innerHeight, 0.2, 5000 );
+                
+                camera.position.set( 0, 30, 70 );
+                camera.lookAt(new THREE.Vector3(0, 0, 0));
+
+                // light
+                var ambientLight = new THREE.AmbientLight( 0xffffff );
+                scene.add( ambientLight );
+
+                var light = new THREE.DirectionalLight( 0xffffff, 1 );
+                light.position.set( 100, 200, 100 );
+                light.castShadow = true;
+                var d = 50;
+                light.shadow.camera.left = -d;
+                light.shadow.camera.right = d;
+                light.shadow.camera.top = d;
+                light.shadow.camera.bottom = -d;
+
+                light.shadow.camera.near = 2;
+                light.shadow.camera.far = 500;
+
+                light.shadow.mapSize.x = 1024;
+                light.shadow.mapSize.y = 1024;
+
+                scene.add( light );
+
+                // setup renderer
+                renderer = new THREE.WebGLRenderer( { antialias: true } );
+                renderer.setClearColor( 0xbfd1e5 );
+                renderer.setPixelRatio( window.devicePixelRatio );
+                renderer.setSize( window.innerWidth - 10, window.innerHeight - 10 );
+                document.body.appendChild( renderer.domElement );
+                renderer.shadowMap.enabled = true;
+
+                // orbit control
+                controls = new THREE.OrbitControls( camera, renderer.domElement );
+
+                controls.enableDamping = true; 
+                controls.dampingFactor = 0.05;
+                controls.screenSpacePanning = false;
+                controls.minDistance = 10;
+                controls.maxDistance = 500;
+                controls.maxPolarAngle = Math.PI / 2; 
+
+                //chart record
+                smoothie = new SmoothieChart({limitFPS:5,maxValue:50,minValue:-50});
+                smoothie.streamTo(document.getElementById("mycanvas"), 10);
+
+                }
+            
+            function createRigidObjects(object, colShape, mass, position, quaternion, colGroup, colMask){
+                
+                var transform = new Ammo.btTransform();
+                transform.setIdentity();
+                transform.setOrigin(new Ammo.btVector3(position.x, position.y, position.z));
+                transform.setRotation(new Ammo.btQuaternion(quaternion.x, quaternion.y, quaternion.z, quaternion.w));
+                var motionState = new Ammo.btDefaultMotionState(transform);
+                var localInertia = new Ammo.btVector3(0, 0, 0);
+                colShape.calculateLocalInertia(mass, localInertia);
+                var rigidBodyInfo = new Ammo.btRigidBodyConstructionInfo(mass, motionState, colShape, localInertia);
+                var rigidBody = new Ammo.btRigidBody(rigidBodyInfo);
+                object.userData.physicsBody = rigidBody;
+                
+                scene.add(object);
+
+                if ( mass > 0 ){
+                    rigidBody.setActivationState( STATE.DISABLE_DEACTIVATION );
+                    rigidBodies.push(object);
+                }
+
+                physicsWorld.addRigidBody(rigidBody, colGroup, colMask);
+
+                }
+
+            function createPlatform(){
+                
+                var pos = {x: 0, y: 0, z: 0};
+                var scale = {x: 50, y: 1, z: 80};
+                var quat = {x: 0, y: 0, z: 0, w: 1};
+                var mass = 0;
+
+                var blockPlane = new THREE.Mesh(new THREE.BoxBufferGeometry(), new THREE.MeshPhongMaterial({color: 0xa0afa4}));
+                blockPlane.position.set(pos.x, pos.y, pos.z);
+                blockPlane.scale.set(scale.x, scale.y, scale.z);
+                blockPlane.castShadow = true;
+                blockPlane.receiveShadow = true;
+
+                var colShape = new Ammo.btBoxShape( new Ammo.btVector3( scale.x * 0.5, scale.y * 0.5, scale.z * 0.5 ) );
+                colShape.setMargin( 0.05 );
+
+                createRigidObjects(blockPlane, colShape, mass, pos, quat, 2, 5);
+
+                }
+
+            function LoadParts(){
+
+                var scale = {x: 80, y: 80, z: 80};
+
+                var loader = new THREE.GLTFLoader();
+                loader.load( 'pendulum_v4_rotate2.glb', function ( gltf ) {
+
+                    gltf.scene.traverse( function ( child ) {
+
+                        if ( child.isMesh ) {
+                            child.scale.set(scale.x, scale.y, scale.z);
+                            // console.log(child);
+                            child.receiveShadow = true;
+                            child.castShadow = true;
+                            if (child.name=="rod"){
+                            rod = child;
+                            }
+                            if (child.name=="cart"){
+                            cart = child; 
+                            }				
+                            if (child.name=="track"){
+                            track = child; 
+                            }	
+                            if (child.name=="tracksup1"){
+                            tracksup1 = child; 
+                            }
+                            if (child.name=="tracksup2"){
+                            tracksup2 = child; 
+                            }
+                        }
+
+                    } );
+
+                    //rod
+                    var pos_rod = {x: 0, y: 35, z: 0};
+                    // var quat_rod = {x: Math.sqrt(2)/2, y: 0, z: 0, w: Math.sqrt(2)/2}; //90
+                    // var quat_rod = {x: 1/2, y: 0, z: 0, w: Math.sqrt(3)/2}; //45
+                     var quat_rod = {x: 0, y: 0, z: 0, w: 1}; //0
+                    var mass_rod = 0.2;
+
+                    // var colShape_rod = new Ammo.btBoxShape( new Ammo.btVector3( scale.x * 0.5 *0.005, scale.y * 0.5 * 0.01, scale.z * 0.5 * 0.3 ) );
+                    var colShape_rod = new Ammo.btBoxShape( new Ammo.btVector3( scale.x * 0.5 *0.01, scale.y * 0.5 * 0.3, scale.z * 0.5 * 0.005 ) );
+                    colShape_rod.setMargin( 0.05 );
+
+                    createRigidObjects(rod, colShape_rod, mass_rod, pos_rod, quat_rod, 4, 2);
+
+                    //cart
+                    var pos_cart = {x: 0, y: 20, z: 0};
+                    // var quat_cart = {x: Math.sqrt(2)/2, y: 0, z: 0, w: Math.sqrt(2)/2}; //90 
+                    // var quat_cart = {x: 1, y: 0, z: 0, w: 0}; //180
+                    var quat_cart = {x: 0, y: 0, z: 0, w: 1}; //0
+                    var mass_cart = 1;
+
+                    cart.position.set(pos_cart.x, pos_cart.y, pos_cart.z);
+
+                    var colShape_cart = new Ammo.btBoxShape( new Ammo.btVector3( scale.x * 0.5 *0.04, scale.y * 0.5 * 0.015, scale.z * 0.5 * 0.045 ) );
+                    colShape_cart.setMargin( 0.05 );
+
+                    createRigidObjects(cart, colShape_cart, mass_cart, pos_cart, quat_cart, 1, 2);
+
+                    //track
+                    var pos_track = {x: 0, y: scale.y * 0.0025, z: 0};
+                    // var quat_track = {x: Math.sqrt(2)/2, y: 0, z: 0, w: Math.sqrt(2)/2}; //90 
+                    var quat_track = {x: 0, y: 0, z: 0, w: 1}; //0 
+                    var mass_track = 0;
+
+                    track.position.set(pos_track.x, pos_track.y, pos_track.z);
+
+                    var colShape_track = new Ammo.btBoxShape( new Ammo.btVector3( scale.x * 0.5 *0.75, scale.y * 0.5 * 0.01, scale.z * 0.5 * 0.04 ) );
+                    colShape_track.setMargin( 0.05 );
+
+                    createRigidObjects(track, colShape_track, mass_track, pos_track, quat_track, 0, 0);
+                    
+                    //tracksup1
+                    var pos_tracksup1 = {x: scale.x * 0.3875, y: 0, z: 0};
+                    // var quat_tracksup1 = {x: Math.sqrt(2)/2, y: 0, z: 0, w: Math.sqrt(2)/2}; //90 
+                    var quat_tracksup1 = {x: 0, y: 0, z: 0, w: 1}; //0 
+                    var mass_tracksup1 = 0;
+
+                    tracksup1.position.set(pos_tracksup1.x, pos_tracksup1.y, pos_tracksup1.z);
+
+                    var colShape_tracksup1 = new Ammo.btBoxShape( new Ammo.btVector3( scale.x * 0.5 *0.025, scale.y * 0.5 * 0.03, scale.z * 0.5 * 0.05 ) );
+                    colShape_tracksup1.setMargin( 0.05 );
+
+                    createRigidObjects(tracksup1, colShape_tracksup1, mass_tracksup1, pos_tracksup1, quat_tracksup1, 2, 5);
+
+                    //tracksup2
+                    var pos_tracksup2 = {x: - scale.x * 0.3875, y: 0, z: 0};
+                    // var quat_tracksup2 = {x: Math.sqrt(2)/2, y: 0, z: 0, w: Math.sqrt(2)/2}; //90 
+                    var quat_tracksup2 = {x: 0, y: 0, z: 0, w: 1}; //0 
+                    var mass_tracksup2 = 0;
+
+                    tracksup2.position.set(pos_tracksup2.x, pos_tracksup2.y, pos_tracksup2.z);
+                    // tracksup2.rotation.set(quat_tracksup2.x, quat_tracksup2.y, quat_tracksup2.z, quat_tracksup2.w);
+
+                    var colShape_tracksup2 = new Ammo.btBoxShape( new Ammo.btVector3( scale.x * 0.5 *0.025, scale.y * 0.5 * 0.03, scale.z * 0.5 * 0.05 ) );
+                    colShape_tracksup2.setMargin( 0.05 );
+
+                    createRigidObjects(tracksup2, colShape_tracksup2, mass_tracksup2, pos_tracksup2, quat_tracksup2, 2, 5);
+
+                    //create joint: cart_rod
+                    var rod_Pivot = new Ammo.btVector3( 0, - 0.145 * scale.y, 0 );
+                    var cart_Pivot = new Ammo.btVector3( 0, 0.0175 * scale.y, 0 );
+                    var rod_axis = new Ammo.btVector3( 0, 0, 1 );
+                    var cart_axis = new Ammo.btVector3( 0, 0, 1 ); 
+
+                    var cart_rod = new Ammo.btHingeConstraint( rod.userData.physicsBody, cart.userData.physicsBody, rod_Pivot, cart_Pivot, rod_axis, cart_axis, false);
+                    
+                    physicsWorld.addConstraint( cart_rod, false );
+
+                    //create joint: cart_track btGeneric6DofConstraint version: allows more settings
+
+                    var frameInA = new Ammo.btTransform();
+                    frameInA.setIdentity();
+                    var frameInB = new Ammo.btTransform();
+                    frameInB.setIdentity();
+
+                    var cart_track = new Ammo.btGeneric6DofConstraint( cart.userData.physicsBody, track.userData.physicsBody, frameInA, frameInB, false);
+                    cart_track.setLinearUpperLimit (new Ammo.btVector3( 0, 0, 0 ));
+                    cart_track.setLinearLowerLimit (new Ammo.btVector3( 1, 0, 0 ));
+                    cart_track.setAngularUpperLimit (new Ammo.btVector3( 0, 0, 0 ));
+                    cart_track.setAngularLowerLimit (new Ammo.btVector3( 0, 0, 0 ));
+                    physicsWorld.addConstraint( cart_track, false );
+
+
+                    /*
+                    //create joint: cart_track btSliderConstraint version: X axis only
+
+                    var frameInA = new Ammo.btTransform();
+                    frameInA.setIdentity();
+                    var frameInB = new Ammo.btTransform();
+                    frameInB.setIdentity();
+
+                    var cart_track = new Ammo.btSliderConstraint( cart.userData.physicsBody, track.userData.physicsBody, frameInA, frameInB, false);
+
+                    physicsWorld.addConstraint( cart_track, false );
+                    */
+
+                }); //loader
+                }
+            
+            //control
+            function keyboardInput(){
+
+                window.addEventListener('keydown', function(event){
+                    
+                    switch(event.keyCode){
+                        case 87: //FORWARD
+                        moveDirection.forward = 1;
+                        break;
+                        
+                        case 83: //BACK
+                        moveDirection.back = 1;
+                        break;
+                        
+                        case 65: //LEFT
+                        moveDirection.left = 1;
+                        break;
+                        
+                        case 68: //RIGHT
+                        moveDirection.right = 1;
+                        break;
+                    }
+                });
+                window.addEventListener('keyup', function(event){
+                    
+                    switch(event.keyCode){
+                        case 87: //FORWARD
+                        moveDirection.forward = 0;
+                        break;
+                        
+                        case 83: //BACK
+                        moveDirection.back = 0;
+                        break;
+                        
+                        case 65: //LEFT
+                        moveDirection.left = 0;
+                        break;
+                        
+                        case 68: //RIGHT
+                        moveDirection.right = 0;
+                        break;
+                    }
+                });
+                }
+            
+            function applyForce(object){
+
+                var moveX =  moveDirection.right - moveDirection.left;
+                var moveZ =  moveDirection.back - moveDirection.forward;
+                var moveY =  0; 
+
+                if( moveX == 0 && moveY == 0 && moveZ == 0) return;
+
+                var resultantForce = new Ammo.btVector3( moveX * Force, moveY * Force, moveZ * Force )
+                var physicsBody = object.userData.physicsBody;
+				physicsBody.applyForce(  resultantForce , new Ammo.btVector3( 0, 0, 0 ));
+
+                }
+
+            function renderFrame(){
+
+                requestAnimationFrame( renderFrame );
+                var deltaTime = clock.getDelta();
+                applyForce(cart);
+                updatePhysics( deltaTime );
+                renderer.render( scene, camera );
+
+                }
+
+            function updatePhysics( deltaTime ){
+
+                // Step world
+                physicsWorld.stepSimulation( deltaTime, 10 );
+
+                // Update rigid bodies
+                for ( var i = 0; i < rigidBodies.length; i++ ) {
+                    var objThree = rigidBodies[ i ];
+                    var objAmmo = objThree.userData.physicsBody;
+                    var motionState = objAmmo.getMotionState();
+                    if ( motionState ) {
+
+                        motionState.getWorldTransform( tmpTransform );
+                        var position = tmpTransform.getOrigin();
+                        var quaternion = tmpTransform.getRotation();
+                        
+                        objThree.position.set( position.x(), position.y(), position.z() );
+
+                        if (objThree.name == 'rod'){
+
+                            lineX_t.append(new Date().getTime(), position.x());
+                            lineY_t.append(new Date().getTime(), position.y());
+                            smoothie.addTimeSeries(lineX_t, {lineWidth:2,strokeStyle:'#00ff00'});
+                            smoothie.addTimeSeries(lineY_t, {lineWidth:2,strokeStyle:'#ff0000'});
+                        
+                        }
+
+                        objThree.quaternion.set( quaternion.x(), quaternion.y(), quaternion.z(), quaternion.w() );
+
+                    }
+                }
+                }
+        
+        
+        }); 
+
+        </script>
+	</body>
+</html>
